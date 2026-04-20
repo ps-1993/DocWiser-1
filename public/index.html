@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Oracle RAG App</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="hero">
+        <h1>DocWiser</h1>
+        <p>Upload a document, store it on disk, index it in Oracle vectors, and ask questions with RAG.</p>
+      </header>
+
+      <section class="grid">
+        <article class="card">
+          <h2>1. Upload document</h2>
+          <form id="upload-form">
+            <input id="document" name="document" type="file" required />
+            <button type="submit">Upload and Index</button>
+          </form>
+          <p id="upload-status" class="status"></p>
+        </article>
+
+        <article class="card">
+          <h2>2. Ask question</h2>
+          <form id="ask-form">
+            <label for="question">Question</label>
+            <textarea id="question" rows="5" placeholder="Ask something about the uploaded document..." required></textarea>
+            <label for="topk">Top K chunks</label>
+            <input id="topk" type="number" min="1" max="10" value="4" />
+            <button type="submit">Ask</button>
+          </form>
+          <p id="ask-status" class="status"></p>
+        </article>
+      </section>
+
+      <section class="card">
+        <h2>Answer</h2>
+        <pre id="answer" class="answer">No answer yet.</pre>
+        <div>
+          <h3>Sources</h3>
+          <ul id="sources" class="sources"></ul>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="documents-header">
+          <h2>Indexed documents</h2>
+          <button id="refresh-documents" type="button">Refresh</button>
+        </div>
+        <ul id="documents" class="documents"></ul>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

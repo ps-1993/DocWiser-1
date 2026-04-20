@@ -1,0 +1,137 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import express from 'express';
+import multer from 'multer';
+import { config, validateConfig } from './config.js';
+import { closeOracle, initializeOracle } from './db/oracle.js';
+import { isSupportedFile } from './services/documentParser.js';
+import { answerQuestion, ingestDocument, listDocuments } from './services/ragService.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const publicDir = path.resolve(__dirname, '../public');
+
+function ensureUploadDir() {
+  fs.mkdirSync(config.uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (_request, _file, callback) => {
+    callback(null, config.uploadDir);
+  },
+  filename: (_request, file, callback) => {
+    const safeName = path.basename(file.originalname).replace(/[^a-zA-Z0-9._-]/g, '_');
+    callback(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}-${safeName}`);
+  }
+});
+
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: config.maxUploadBytes
+  },
+  fileFilter: (_request, file, callback) => {
+    if (isSupportedFile(file.originalname, file.mimetype)) {
+      callback(null, true);
+      return;
+    }
+
+    callback(new Error('Unsupported file type. Use PDF, DOCX, TXT, MD, CSV, or JSON.'));
+  }
+});
+
+app.use(express.json({ limit: '2mb' }));
+app.use(express.static(publicDir));
+
+app.get('/api/health', (_request, response) => {
+  response.json({ status: 'ok' });
+});
+
+app.get('/api/documents', async (_request, response) => {
+  try {
+    const documents = await listDocuments();
+    response.json({ documents });
+  } catch (error) {
+    response.status(500).json({ error: error.message || 'Failed to load documents.' });
+  }
+});
+
+app.post('/api/upload', upload.single('document'), async (request, response) => {
+  try {
+    if (!request.file) {
+      response.status(400).json({ error: 'No file uploaded.' });
+      return;
+    }
+
+    const result = await ingestDocument(request.file);
+    response.status(201).json(result);
+  } catch (error) {
+    response.status(500).json({ error: error.message || 'Upload failed.' });
+  }
+});
+
+app.post('/api/ask', async (request, response) => {
+  try {
+    const question = String(request.body?.question || '').trim();
+
+    if (!question) {
+      response.status(400).json({ error: 'Question is required.' });
+      return;
+    }
+
+    const result = await answerQuestion(question, request.body?.topK);
+    response.json(result);
+  } catch (error) {
+    response.status(500).json({ error: error.message || 'Question answering failed.' });
+  }
+});
+
+app.use((error, _request, response, _next) => {
+  if (error instanceof multer.MulterError) {
+    response.status(400).json({ error: error.message });
+    return;
+  }
+
+  response.status(500).json({ error: error.message || 'Unexpected server error.' });
+});
+
+async function start() {
+  validateConfig();
+  ensureUploadDir();
+  await initializeOracle();
+
+  app.listen(config.port, () => {
+    console.log(`Oracle RAG app is running at http://localhost:${config.port}`);
+  });
+}
+
+async function shutdown(signal) {
+  try {
+    console.log(`Received ${signal}. Shutting down gracefully...`);
+    await closeOracle();
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.on('SIGINT', () => {
+  shutdown('SIGINT').catch((error) => {
+    console.error('Error during shutdown:', error);
+    process.exit(1);
+  });
+});
+
+process.on('SIGTERM', () => {
+  shutdown('SIGTERM').catch((error) => {
+    console.error('Error during shutdown:', error);
+    process.exit(1);
+  });
+});
+
+start().catch((error) => {
+  console.error('Failed to start application:', error);
+  process.exit(1);
+});
