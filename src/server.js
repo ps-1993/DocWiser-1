@@ -7,6 +7,11 @@ import { config, validateConfig } from './config.js';
 import { closeOracle, initializeOracle } from './db/oracle.js';
 import { isSupportedFile } from './services/documentParser.js';
 import { answerQuestion, ingestDocument, listDocuments } from './services/ragService.js';
+import {
+  ingestTemplate,
+  listTemplates,
+  validateDocumentAgainstTemplate
+} from './services/templateService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -70,6 +75,43 @@ app.post('/api/upload', upload.single('document'), async (request, response) => 
     response.status(201).json(result);
   } catch (error) {
     response.status(500).json({ error: error.message || 'Upload failed.' });
+  }
+});
+
+app.get('/api/templates', async (_request, response) => {
+  try {
+    const templates = await listTemplates();
+    response.json({ templates });
+  } catch (error) {
+    response.status(500).json({ error: error.message || 'Failed to load templates.' });
+  }
+});
+
+app.post('/api/templates', upload.single('template'), async (request, response) => {
+  try {
+    if (!request.file) {
+      response.status(400).json({ error: 'No template uploaded.' });
+      return;
+    }
+
+    const result = await ingestTemplate(request.file);
+    response.status(201).json(result);
+  } catch (error) {
+    response.status(500).json({ error: error.message || 'Template upload failed.' });
+  }
+});
+
+app.post('/api/validate', upload.single('document'), async (request, response) => {
+  try {
+    if (!request.file) {
+      response.status(400).json({ error: 'No document uploaded.' });
+      return;
+    }
+
+    const result = await validateDocumentAgainstTemplate(request.body?.templateId, request.file);
+    response.json(result);
+  } catch (error) {
+    response.status(500).json({ error: error.message || 'Template validation failed.' });
   }
 });
 
