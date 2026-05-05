@@ -15,6 +15,7 @@ Small Node.js application that lets you:
 - Oracle vector storage using `VECTOR(...)`
 - Retrieval with `VECTOR_DISTANCE(..., COSINE)`
 - Ollama and OpenAI-compatible embeddings + chat API support
+- Template upload and LLM-based document validation
 - Simple browser UI
 
 ## Supported file types
@@ -121,6 +122,16 @@ http://localhost:3000
 4. Retrieved chunks are sent to the LLM as context
 5. LLM returns the final answer
 
+### Template validation flow
+
+1. User uploads a template document
+2. Text is extracted from the template
+3. The LLM converts the template into structured validation rules
+4. The template and rules are stored in Oracle
+5. User selects a template and uploads a document to validate
+6. The LLM compares the document text against the stored rules
+7. The app returns a validation status, score, issues, and recommendations
+
 ## Ollama support
 
 The app now supports Ollama natively:
@@ -136,6 +147,8 @@ The app auto-creates the required tables on startup:
 
 - `documents`
 - `document_chunks`
+- `templates`
+- `validation_results`
 
 The vector column is created like this:
 
@@ -184,6 +197,30 @@ Content-Type: application/json
 
 ```http
 GET /api/documents
+```
+
+### Upload template
+
+```http
+POST /api/templates
+Content-Type: multipart/form-data
+field name: template
+```
+
+### List templates
+
+```http
+GET /api/templates
+```
+
+### Validate document against template
+
+```http
+POST /api/validate
+Content-Type: multipart/form-data
+fields:
+  templateId
+  document
 ```
 
 ## Notes
