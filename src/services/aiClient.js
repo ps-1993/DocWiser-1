@@ -131,6 +131,26 @@ function normalizeArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function normalizeWhitespace(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function isGenericSuggestedQuestion(question) {
+  return /^(what is this document about|summari[sz]e this document|what are the key points|what are the main points)\??$/i.test(
+    normalizeWhitespace(question)
+  );
+}
+
+function appearsInDocument(quote, documentText) {
+  const normalizedQuote = normalizeWhitespace(quote).toLowerCase();
+
+  if (!normalizedQuote) {
+    return false;
+  }
+
+  return normalizeWhitespace(documentText).toLowerCase().includes(normalizedQuote);
+}
+
 function mentionsDisallowedValidation(reason) {
   return /\b(grammar|grammatical|syntax|spelling|typo|misspell|punctuation|capitalization|capitalisation|style|tone|wording|proofread|proofreading|incorrect title)\b/i.test(
     String(reason || '')
@@ -245,6 +265,80 @@ export async function generateRagAnswer(question, contexts) {
   ];
 
   return generateChatCompletion(messages);
+}
+
+export async function generateSuggestedQuestions(documentText) {
+  const messages = [
+    {
+      role: 'system',
+      content:
+        'You create document-grounded questions for a RAG assistant. Use only the provided document text. Do not use outside knowledge, assumptions, or inferred facts. Return only valid JSON with no markdown, comments, or prose.'
+    },
+    {
+      role: 'user',
+      content: `Analyze the uploaded document text and create up to 5 concise questions a user may want to ask about it.
+
+Rules:
+- Each question must be directly answerable from the document text below.
+- Each question must include an exact evidenceQuote copied from the document text that proves the question is grounded in the document.
+- Do not ask about anything that is not explicitly present in the document.
+- Do not use real-world knowledge, current events, assumptions, implications, or likely background context.
+- Do not ask questions about correctness, grammar, spelling, or whether the document is accurate.
+- Do not ask generic questions like "What is this document about?"
+- If the document is too short for 5 distinct grounded questions, return fewer than 5.
+- Return this exact JSON shape:
+{
+  "questions": [
+    {
+      "question": "question 1",
+      "evidenceQuote": "exact quote copied from the document"
+    }
+  ]
+}
+
+Document text:
+${truncateText(documentText, config.rag.maxContextChars)}`
+    }
+  ];
+
+  const responseText = await generateChatCompletion(messages, { temperature: 0 });
+  const parsed = extractJsonObject(responseText);
+  const seenQuestions = new Set();
+
+  return normalizeArray(parsed.questions)
+    .map((item) => {
+      if (typeof item === 'string') {
+        return {
+          question: item,
+          evidenceQuote: ''
+        };
+      }
+
+      return {
+        question: item?.question,
+        evidenceQuote: item?.evidenceQuote
+      };
+    })
+    .map((item) => ({
+      question: String(item.question || '').trim(),
+      evidenceQuote: String(item.evidenceQuote || '').trim()
+    }))
+    .filter((item) => {
+      if (!item.question || isGenericSuggestedQuestion(item.question)) {
+        return false;
+      }
+
+      const questionKey = item.question.toLowerCase();
+
+      if (seenQuestions.has(questionKey)) {
+        return false;
+      }
+
+      seenQuestions.add(questionKey);
+      return appearsInDocument(item.evidenceQuote, documentText);
+    })
+    .map((item) => item.question)
+    .slice(0, 5);
 }
 
 export async function generateTemplateRules(templateText) {

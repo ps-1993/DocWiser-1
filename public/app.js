@@ -11,6 +11,8 @@ const validationResultEl = document.getElementById('validation-result');
 const sourcesEl = document.getElementById('sources');
 const documentsEl = document.getElementById('documents');
 const templateSelect = document.getElementById('template-select');
+const suggestedQuestionsPanel = document.getElementById('suggested-questions-panel');
+const suggestedQuestionsEl = document.getElementById('suggested-questions');
 const refreshDocumentsButton = document.getElementById('refresh-documents');
 const menuToggle = document.getElementById('menu-toggle');
 const pageMenu = document.getElementById('page-menu');
@@ -114,6 +116,30 @@ function renderSources(citations = []) {
           Chunk: ${escapeHtml(citation.chunkIndex)}<br />
           Score: ${escapeHtml(citation.score ?? 'n/a')}
         </li>
+      `
+    )
+    .join('');
+}
+
+function renderSuggestedQuestions(questions = []) {
+  const usableQuestions = questions
+    .map((question) => String(question || '').trim())
+    .filter(Boolean)
+    .slice(0, 5);
+
+  if (usableQuestions.length === 0) {
+    suggestedQuestionsPanel.classList.add('hidden');
+    suggestedQuestionsEl.innerHTML = '';
+    return;
+  }
+
+  suggestedQuestionsPanel.classList.remove('hidden');
+  suggestedQuestionsEl.innerHTML = usableQuestions
+    .map(
+      (question) => `
+        <button class="suggested-question" type="button" data-question="${escapeHtml(question)}">
+          ${escapeHtml(question)}
+        </button>
       `
     )
     .join('');
@@ -309,11 +335,30 @@ uploadForm.addEventListener('submit', async (event) => {
     }
 
     setStatus(uploadStatus, `Indexed ${payload.originalName} with ${payload.chunkCount} chunks.`);
+    renderSuggestedQuestions(payload.suggestedQuestions || []);
+
+    if (payload.suggestionError) {
+      setStatus(
+        uploadStatus,
+        `Indexed ${payload.originalName} with ${payload.chunkCount} chunks, but suggested questions could not be generated: ${payload.suggestionError}`
+      );
+    }
+
     fileInput.value = '';
     await loadDocuments();
   } catch (error) {
     setStatus(uploadStatus, error.message, true);
   }
+});
+
+suggestedQuestionsEl.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-question]');
+
+  if (!button) {
+    return;
+  }
+
+  askQuestion(button.dataset.question);
 });
 
 templateForm.addEventListener('submit', async (event) => {
@@ -396,10 +441,9 @@ validateForm.addEventListener('submit', async (event) => {
   }
 });
 
-askForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-
-  const question = document.getElementById('question').value.trim();
+async function askQuestion(questionValue) {
+  const questionInput = document.getElementById('question');
+  const question = String(questionValue ?? questionInput.value).trim();
   const topK = Number(document.getElementById('topk').value || 4);
 
   if (!question) {
@@ -407,6 +451,7 @@ askForm.addEventListener('submit', async (event) => {
     return;
   }
 
+  questionInput.value = question;
   setStatus(askStatus, 'Searching chunks and asking the LLM...');
   answerEl.textContent = 'Loading...';
   sourcesEl.innerHTML = '';
@@ -433,6 +478,11 @@ askForm.addEventListener('submit', async (event) => {
     renderSources([]);
     setStatus(askStatus, error.message, true);
   }
+}
+
+askForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  await askQuestion();
 });
 
 refreshDocumentsButton.addEventListener('click', () => {

@@ -6,7 +6,12 @@ import {
   searchSimilarChunks,
   updateDocumentStatus
 } from '../db/oracle.js';
-import { embedQuery, embedTexts, generateRagAnswer } from './aiClient.js';
+import {
+  embedQuery,
+  embedTexts,
+  generateRagAnswer,
+  generateSuggestedQuestions
+} from './aiClient.js';
 import { chunkText } from './chunking.js';
 import { extractTextFromFile } from './documentParser.js';
 
@@ -48,12 +53,23 @@ export async function ingestDocument(file) {
       errorMessage: null
     });
 
+    let suggestedQuestions = [];
+    let suggestionError = null;
+
+    try {
+      suggestedQuestions = await generateSuggestedQuestions(cleanedText);
+    } catch (error) {
+      suggestionError = error.message || 'Failed to generate suggested questions.';
+    }
+
     return {
       documentId,
       originalName: file.originalname,
       storedName: file.filename,
       chunkCount: chunkRows.length,
-      status: 'ready'
+      status: 'ready',
+      suggestedQuestions,
+      suggestionError
     };
   } catch (error) {
     await updateDocumentStatus(documentId, 'error', {
