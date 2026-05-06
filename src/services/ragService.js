@@ -1,19 +1,16 @@
 import { config } from '../config.js';
 import {
   createDocument,
-  insertDocumentChunks,
   listDocuments,
-  searchSimilarChunks,
+  updateDocumentOciMetadata,
   updateDocumentStatus
 } from '../db/oracle.js';
 import {
-  embedQuery,
-  embedTexts,
   generateRagAnswer,
   generateSuggestedQuestions
 } from './aiClient.js';
-import { chunkText } from './chunking.js';
 import { extractTextFromFile } from './documentParser.js';
+import { indexFileInVectorStore, searchVectorStore } from './ociVectorStore.js';
 
 export async function ingestDocument(file) {
   const documentId = await createDocument({
@@ -21,7 +18,8 @@ export async function ingestDocument(file) {
     storedName: file.filename,
     storagePath: file.path,
     mimeType: file.mimetype,
-    fileSize: file.size
+    fileSize: file.size,
+    documentStoreProvider: config.documentStore.provider
   });
 
   try {
@@ -32,24 +30,14 @@ export async function ingestDocument(file) {
       throw new Error('No readable text was extracted from the uploaded file.');
     }
 
-    const chunks = chunkText(cleanedText, {
-      chunkSize: config.rag.chunkSize,
-      chunkOverlap: config.rag.chunkOverlap
+    const indexedFile = await indexFileInVectorStore(file);
+    await updateDocumentOciMetadata(documentId, {
+      ociFileId: indexedFile.ociFileId,
+      ociVectorStoreFileId: indexedFile.ociVectorStoreFileId,
+      documentStoreProvider: config.documentStore.provider
     });
-
-    if (chunks.length === 0) {
-      throw new Error('Document chunking produced no chunks.');
-    }
-
-    const embeddings = await embedTexts(chunks.map((chunk) => chunk.text));
-    const chunkRows = chunks.map((chunk, index) => ({
-      ...chunk,
-      embedding: embeddings[index]
-    }));
-
-    await insertDocumentChunks(documentId, chunkRows);
     await updateDocumentStatus(documentId, 'ready', {
-      chunkCount: chunkRows.length,
+      chunkCount: 0,
       errorMessage: null
     });
 
@@ -66,8 +54,11 @@ export async function ingestDocument(file) {
       documentId,
       originalName: file.originalname,
       storedName: file.filename,
-      chunkCount: chunkRows.length,
+      chunkCount: 0,
       status: 'ready',
+      documentStoreProvider: config.documentStore.provider,
+      ociFileId: indexedFile.ociFileId,
+      ociVectorStoreFileId: indexedFile.ociVectorStoreFileId,
       suggestedQuestions,
       suggestionError
     };
@@ -81,12 +72,11 @@ export async function ingestDocument(file) {
 }
 
 export async function answerQuestion(question, topK) {
-  const queryEmbedding = await embedQuery(question);
-  const matches = await searchSimilarChunks(queryEmbedding, topK || config.rag.topK);
+  const matches = await searchVectorStore(question, topK || config.rag.topK);
 
   if (matches.length === 0) {
     return {
-      answer: 'No indexed document chunks were found. Please upload a document first.',
+      answer: 'No OCI vector store results were found. Please upload and index a document first.',
       citations: [],
       matches: []
     };

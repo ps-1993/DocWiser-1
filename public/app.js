@@ -89,15 +89,23 @@ function renderDocuments(documents) {
 
   documentsEl.innerHTML = documents
     .map(
-      (document) => `
-        <li class="document-item">
-          <strong>${escapeHtml(document.ORIGINAL_NAME)}</strong><br />
-          <span class="muted">Status: ${escapeHtml(document.STATUS)}</span><br />
-          <span class="muted">Chunks: ${escapeHtml(document.CHUNK_COUNT)}</span><br />
-          <span class="muted">Stored: ${escapeHtml(document.STORAGE_PATH)}</span>
-          ${document.ERROR_MESSAGE ? `<br /><span style="color:#fca5a5;">Error: ${escapeHtml(document.ERROR_MESSAGE)}</span>` : ''}
-        </li>
-      `
+      (document) => {
+        const storeProvider = document.DOCUMENT_STORE_PROVIDER || 'oci-vector-store';
+        const indexLabel = storeProvider === 'oci-vector-store'
+          ? `OCI file: ${document.OCI_FILE_ID || 'pending'}`
+          : `Chunks: ${document.CHUNK_COUNT}`;
+
+        return `
+          <li class="document-item">
+            <strong>${escapeHtml(document.ORIGINAL_NAME)}</strong><br />
+            <span class="muted">Status: ${escapeHtml(document.STATUS)}</span><br />
+            <span class="muted">Store: ${escapeHtml(storeProvider)}</span><br />
+            <span class="muted">${escapeHtml(indexLabel)}</span><br />
+            <span class="muted">Stored: ${escapeHtml(document.STORAGE_PATH)}</span>
+            ${document.ERROR_MESSAGE ? `<br /><span style="color:#fca5a5;">Error: ${escapeHtml(document.ERROR_MESSAGE)}</span>` : ''}
+          </li>
+        `;
+      }
     )
     .join('');
 }
@@ -334,13 +342,13 @@ uploadForm.addEventListener('submit', async (event) => {
       throw new Error(payload.error || 'Upload failed.');
     }
 
-    setStatus(uploadStatus, `Indexed ${payload.originalName} with ${payload.chunkCount} chunks.`);
+    setStatus(uploadStatus, `Indexed ${payload.originalName} in ${payload.documentStoreProvider || 'OCI vector store'}.`);
     renderSuggestedQuestions(payload.suggestedQuestions || []);
 
     if (payload.suggestionError) {
       setStatus(
         uploadStatus,
-        `Indexed ${payload.originalName} with ${payload.chunkCount} chunks, but suggested questions could not be generated: ${payload.suggestionError}`
+        `Indexed ${payload.originalName} in ${payload.documentStoreProvider || 'OCI vector store'}, but suggested questions could not be generated: ${payload.suggestionError}`
       );
     }
 
@@ -375,7 +383,7 @@ templateForm.addEventListener('submit', async (event) => {
   const formData = new FormData();
   formData.append('template', file);
 
-  setStatus(templateStatus, 'Uploading template and extracting validation rules...');
+  setStatus(templateStatus, 'Uploading template, indexing in OCI vector store, and extracting validation rules...');
 
   try {
     const response = await fetch('/api/templates', {
@@ -388,7 +396,7 @@ templateForm.addEventListener('submit', async (event) => {
       throw new Error(payload.error || 'Template upload failed.');
     }
 
-    setStatus(templateStatus, `Template ready: ${payload.originalName}`);
+    setStatus(templateStatus, `Template ready: ${payload.originalName} indexed in ${payload.documentStoreProvider || 'OCI vector store'}.`);
     fileInput.value = '';
     await loadTemplates();
     templateSelect.value = String(payload.templateId);
@@ -418,7 +426,7 @@ validateForm.addEventListener('submit', async (event) => {
   formData.append('templateId', templateId);
   formData.append('document', file);
 
-  setStatus(validationStatus, 'Validating document against template...');
+  setStatus(validationStatus, 'Indexing document in OCI vector store and validating against template...');
   validationResultEl.textContent = 'Loading...';
 
   try {
