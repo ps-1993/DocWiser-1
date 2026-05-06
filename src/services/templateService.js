@@ -1,3 +1,4 @@
+import { config } from '../config.js';
 import {
   createTemplate,
   createValidationResult,
@@ -6,6 +7,7 @@ import {
 } from '../db/oracle.js';
 import { generateTemplateRules, generateTemplateValidation } from './aiClient.js';
 import { extractTextFromFile } from './documentParser.js';
+import { indexFileInVectorStore } from './ociVectorStore.js';
 
 function parseRulesJson(value) {
   if (typeof value === 'object' && value !== null) {
@@ -55,6 +57,7 @@ export async function ingestTemplate(file) {
     throw new Error('No readable text was extracted from the uploaded template.');
   }
 
+  const indexedTemplate = await indexFileInVectorStore(file);
   const rules = await generateTemplateRules(templateText);
   const templateId = await createTemplate({
     originalName: file.originalname,
@@ -63,12 +66,18 @@ export async function ingestTemplate(file) {
     mimeType: file.mimetype,
     fileSize: file.size,
     templateText,
-    rulesJson: JSON.stringify(rules)
+    rulesJson: JSON.stringify(rules),
+    documentStoreProvider: config.documentStore.provider,
+    ociFileId: indexedTemplate.ociFileId,
+    ociVectorStoreFileId: indexedTemplate.ociVectorStoreFileId
   });
 
   return {
     templateId,
     originalName: file.originalname,
+    documentStoreProvider: config.documentStore.provider,
+    ociFileId: indexedTemplate.ociFileId,
+    ociVectorStoreFileId: indexedTemplate.ociVectorStoreFileId,
     rules
   };
 }
@@ -93,6 +102,7 @@ export async function validateDocumentAgainstTemplate(templateId, file) {
     throw new Error('No readable text was extracted from the uploaded document.');
   }
 
+  const indexedDocument = await indexFileInVectorStore(file);
   const rules = parseRulesJson(template.RULES_JSON);
   const templateText = String(template.TEMPLATE_TEXT || '').trim();
   const validation =
@@ -106,7 +116,10 @@ export async function validateDocumentAgainstTemplate(templateId, file) {
   const validationResultId = await createValidationResult({
     templateId: numericTemplateId,
     documentName: file.originalname,
-    resultJson: JSON.stringify(validation)
+    resultJson: JSON.stringify(validation),
+    documentStoreProvider: config.documentStore.provider,
+    ociFileId: indexedDocument.ociFileId,
+    ociVectorStoreFileId: indexedDocument.ociVectorStoreFileId
   });
 
   return {
@@ -114,6 +127,9 @@ export async function validateDocumentAgainstTemplate(templateId, file) {
     templateId: numericTemplateId,
     templateName: template.ORIGINAL_NAME,
     documentName: file.originalname,
+    documentStoreProvider: config.documentStore.provider,
+    ociFileId: indexedDocument.ociFileId,
+    ociVectorStoreFileId: indexedDocument.ociVectorStoreFileId,
     result: validation
   };
 }
