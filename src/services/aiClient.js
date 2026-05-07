@@ -341,6 +341,26 @@ ${truncateText(documentText, config.rag.maxContextChars)}`
     .slice(0, 5);
 }
 
+export async function generateDocumentSummary(documentText) {
+  const messages = [
+    {
+      role: 'system',
+      content:
+        'You summarize documents for users. Use only the provided document text. Keep the summary concise and factual. Do not add outside knowledge.'
+    },
+    {
+      role: 'user',
+      content: `Summarize the uploaded document in 3-5 sentences. Focus on the main topics, key entities, and any important numbers or dates that appear explicitly in the text.
+
+Document text:
+${truncateText(documentText, config.rag.maxContextChars)}`
+    }
+  ];
+
+  const responseText = await generateChatCompletion(messages, { temperature: 0 });
+  return responseText.trim();
+}
+
 export async function generateTemplateRules(templateText) {
   const messages = [
     {
