@@ -95,6 +95,20 @@ async function ensureSchema() {
       'oci_vector_store_file_id VARCHAR2(255)'
     );
 
+    await addColumnIfMissing(
+      connection,
+      'documents',
+      'summary_text',
+      'summary_text CLOB'
+    );
+
+    await addColumnIfMissing(
+      connection,
+      'documents',
+      'short_description',
+      'short_description VARCHAR2(512)'
+    );
+
     await createObjectIfMissing(
       connection,
       `CREATE TABLE templates (
@@ -239,7 +253,12 @@ export async function createDocument(file) {
 }
 
 export async function updateDocumentStatus(documentId, status, options = {}) {
-  const { chunkCount = null, errorMessage = null } = options;
+  const {
+    chunkCount = null,
+    errorMessage = null,
+    summaryText = null,
+    shortDescription = null
+  } = options;
 
   await withConnection(async (connection) => {
     const assignments = ['status = :status', 'error_message = :error_message'];
@@ -261,6 +280,20 @@ export async function updateDocumentStatus(documentId, status, options = {}) {
       binds.chunk_count = {
         val: chunkCount,
         type: oracledb.NUMBER
+      };
+    }
+
+    if (summaryText !== null) {
+      assignments.push('summary_text = :summary_text');
+      binds.summary_text = toClobBind(summaryText);
+    }
+
+    if (shortDescription !== null) {
+      assignments.push('short_description = :short_description');
+      binds.short_description = {
+        val: shortDescription,
+        type: oracledb.STRING,
+        maxSize: 512
       };
     }
 
@@ -298,6 +331,38 @@ export async function updateDocumentOciMetadata(documentId, metadata = {}) {
   });
 }
 
+export async function updateDocumentForReupload(documentId, file) {
+  await withConnection(async (connection) => {
+    await connection.execute(
+      `UPDATE documents
+          SET stored_name = :stored_name,
+              storage_path = :storage_path,
+              mime_type = :mime_type,
+              file_size = :file_size,
+              status = 'processing',
+              chunk_count = 0,
+              error_message = NULL,
+              summary_text = NULL,
+              short_description = NULL,
+              document_store_provider = :document_store_provider
+        WHERE id = :id`,
+      {
+        stored_name: file.storedName,
+        storage_path: file.storagePath,
+        mime_type: file.mimeType,
+        file_size: file.fileSize,
+        document_store_provider: file.documentStoreProvider || null,
+        id: {
+          val: documentId,
+          type: oracledb.NUMBER
+        }
+      }
+    );
+
+    await connection.commit();
+  });
+}
+
 export async function listDocuments() {
   return withConnection(async (connection) => {
     const result = await connection.execute(
@@ -313,6 +378,8 @@ export async function listDocuments() {
          document_store_provider,
          oci_file_id,
          oci_vector_store_file_id,
+         summary_text,
+         short_description,
          error_message,
          created_at
        FROM documents
@@ -320,6 +387,164 @@ export async function listDocuments() {
     );
 
     return result.rows;
+  });
+}
+
+export async function findDocumentByOriginalName(originalName) {
+  return withConnection(async (connection) => {
+    const result = await connection.execute(
+      `SELECT
+         id,
+         original_name,
+         stored_name,
+         storage_path,
+         mime_type,
+         file_size,
+         status,
+         chunk_count,
+         summary_text,
+         short_description,
+         error_message,
+         created_at
+       FROM documents
+      WHERE original_name = :original_name
+      ORDER BY created_at DESC
+      FETCH FIRST 1 ROWS ONLY`,
+      {
+        original_name: originalName
+      }
+    );
+
+    return result.rows[0] || null;
+  });
+}
+
+export async function findDocumentById(documentId) {
+  return withConnection(async (connection) => {
+    const result = await connection.execute(
+      `SELECT
+         id,
+         original_name,
+         stored_name,
+         storage_path,
+         mime_type,
+         file_size,
+         status,
+         chunk_count,
+         summary_text,
+         short_description,
+         error_message,
+         created_at
+       FROM documents
+      WHERE id = :document_id`,
+      {
+        document_id: documentId
+      }
+    );
+
+    return result.rows[0] || null;
+  });
+}
+
+export async function listDocumentChunksById(documentId, limit = 10) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 10, 40));
+
+  return withConnection(async (connection) => {
+    const result = await connection.execute(
+      `SELECT
+         dc.chunk_text,
+         dc.chunk_index,
+         d.original_name
+       FROM document_chunks dc
+       JOIN documents d ON d.id = dc.document_id
+      WHERE d.id = :document_id
+        AND d.status = 'ready'
+      ORDER BY dc.chunk_index
+      FETCH FIRST ${safeLimit} ROWS ONLY`,
+      {
+        document_id: documentId
+      }
+    );
+
+    return result.rows.map((row) => ({
+      text: row.CHUNK_TEXT,
+      chunkIndex: row.CHUNK_INDEX,
+      originalName: row.ORIGINAL_NAME
+    }));
+  });
+}
+
+export async function searchSimilarChunks(queryEmbedding, topK) {
+  const safeTopK = Math.max(1, Math.min(Number(topK) || config.rag.topK, 20));
+
+  return withConnection(async (connection) => {
+    const result = await connection.execute(
+      `SELECT
+         dc.id,
+         dc.document_id,
+         dc.chunk_index,
+         dc.chunk_text,
+         d.original_name,
+         d.storage_path,
+         VECTOR_DISTANCE(dc.embedding, TO_VECTOR(:embedding_json), COSINE) AS distance
+       FROM document_chunks dc
+       JOIN documents d ON d.id = dc.document_id
+      WHERE d.status = 'ready'
+      ORDER BY distance ASC
+      FETCH FIRST ${safeTopK} ROWS ONLY`,
+      {
+        embedding_json: toClobBind(toVectorJson(queryEmbedding))
+      }
+    );
+
+    return result.rows.map((row) => ({
+      id: row.ID,
+      documentId: row.DOCUMENT_ID,
+      chunkIndex: row.CHUNK_INDEX,
+      text: row.CHUNK_TEXT,
+      originalName: row.ORIGINAL_NAME,
+      storagePath: row.STORAGE_PATH,
+      distance: row.DISTANCE,
+      score: typeof row.DISTANCE === 'number' ? Math.max(0, 1 - row.DISTANCE) : null
+    }));
+  });
+}
+
+export async function searchSimilarChunksForDocument(documentId, queryEmbedding, topK) {
+  const safeTopK = Math.max(1, Math.min(Number(topK) || config.rag.topK, 20));
+
+  return withConnection(async (connection) => {
+    const result = await connection.execute(
+      `SELECT
+         dc.id,
+         dc.document_id,
+         dc.chunk_index,
+         dc.chunk_text,
+         d.original_name,
+         d.storage_path,
+         VECTOR_DISTANCE(dc.embedding, TO_VECTOR(:embedding_json), COSINE) AS distance
+       FROM document_chunks dc
+       JOIN documents d ON d.id = dc.document_id
+      WHERE d.status = 'ready'
+        AND d.id = :document_id
+      ORDER BY distance ASC
+      FETCH FIRST ${safeTopK} ROWS ONLY`,
+      {
+        document_id: documentId,
+        embedding_json: toClobBind(toVectorJson(queryEmbedding))
+      }
+    );
+
+    return result.rows.map((row) => ({
+      id: row.ID,
+      documentId: row.DOCUMENT_ID,
+      chunkIndex: row.CHUNK_INDEX,
+      text: row.CHUNK_TEXT,
+      originalName: row.ORIGINAL_NAME,
+      storagePath: row.STORAGE_PATH,
+      distance: row.DISTANCE,
+      score: typeof row.DISTANCE === 'number' ? Math.max(0, 1 - row.DISTANCE) : null
+    }));
   });
 }
 

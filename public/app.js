@@ -8,16 +8,24 @@ const templateStatus = document.getElementById('template-status');
 const validationStatus = document.getElementById('validation-status');
 const answerEl = document.getElementById('answer');
 const validationResultEl = document.getElementById('validation-result');
+const documentSummaryEl = document.getElementById('document-summary');
 const sourcesEl = document.getElementById('sources');
 const documentsEl = document.getElementById('documents');
 const templateSelect = document.getElementById('template-select');
 const suggestedQuestionsPanel = document.getElementById('suggested-questions-panel');
 const suggestedQuestionsEl = document.getElementById('suggested-questions');
+const suggestedQuestionsStatus = document.getElementById('suggested-questions-status');
 const refreshDocumentsButton = document.getElementById('refresh-documents');
 const menuToggle = document.getElementById('menu-toggle');
 const pageMenu = document.getElementById('page-menu');
 const navLinks = Array.from(document.querySelectorAll('[data-page]'));
 const pagePanels = Array.from(document.querySelectorAll('[data-page-panel]'));
+const selectedDocumentEl = document.getElementById('selected-document');
+const uploadLoader = document.getElementById('upload-loader');
+const suggestedQuestionsLoader = document.getElementById('suggested-questions-loader');
+const documentInput = document.getElementById('document');
+const questionInput = document.getElementById('question');
+let latestDocumentId = null;
 
 function setStatus(element, text, isError = false) {
   element.textContent = text;
@@ -31,6 +39,28 @@ function escapeHtml(value = '') {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function formatCreatedAt(value) {
+  if (!value) {
+    return 'Unknown';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return date.toLocaleString();
+}
+
+function formatSummaryLine(value) {
+  const text = String(value || '').trim();
+  if (!text) {
+    return '';
+  }
+
+  return text.replace(/^here is a summary of the document[^:]*:?\s*/i, 'Summary: ');
 }
 
 function setActivePage(pageName, updateHash = true) {
@@ -91,23 +121,32 @@ function renderDocuments(documents) {
     .map(
       (document) => {
         const storeProvider = document.DOCUMENT_STORE_PROVIDER || 'oci-vector-store';
+        const rawSummary = document.SHORT_DESCRIPTION || document.SUMMARY_TEXT || 'Summary pending.';
+        const summaryText = formatSummaryLine(rawSummary);
         const indexLabel = storeProvider === 'oci-vector-store'
           ? `OCI file: ${document.OCI_FILE_ID || 'pending'}`
           : `Chunks: ${document.CHUNK_COUNT}`;
 
         return `
-          <li class="document-item">
+          <li class="document-item selectable" data-document-id="${escapeHtml(document.ID)}" data-document-name="${escapeHtml(document.ORIGINAL_NAME)}">
             <strong>${escapeHtml(document.ORIGINAL_NAME)}</strong><br />
+            <span class="document-summary-line">${escapeHtml(summaryText)}</span><br />
             <span class="muted">Status: ${escapeHtml(document.STATUS)}</span><br />
-            <span class="muted">Store: ${escapeHtml(storeProvider)}</span><br />
             <span class="muted">${escapeHtml(indexLabel)}</span><br />
-            <span class="muted">Stored: ${escapeHtml(document.STORAGE_PATH)}</span>
+            <span class="muted">Uploaded at: ${escapeHtml(formatCreatedAt(document.CREATED_AT))}</span><br />
             ${document.ERROR_MESSAGE ? `<br /><span style="color:#fca5a5;">Error: ${escapeHtml(document.ERROR_MESSAGE)}</span>` : ''}
           </li>
         `;
       }
     )
     .join('');
+}
+
+function resetQuestionAndAnswer() {
+  questionInput.value = '';
+  answerEl.textContent = 'No answer yet.';
+  sourcesEl.innerHTML = '';
+  askStatus.textContent = '';
 }
 
 function renderSources(citations = []) {
@@ -129,19 +168,35 @@ function renderSources(citations = []) {
     .join('');
 }
 
-function renderSuggestedQuestions(questions = []) {
+function renderSuggestedQuestions(questions = [], options = {}) {
+  const {
+    showEmptyState = false,
+    emptyMessage = 'No suggested questions available for this document.'
+  } = options;
   const usableQuestions = questions
     .map((question) => String(question || '').trim())
     .filter(Boolean)
     .slice(0, 5);
 
   if (usableQuestions.length === 0) {
-    suggestedQuestionsPanel.classList.add('hidden');
     suggestedQuestionsEl.innerHTML = '';
+
+    if (showEmptyState) {
+      suggestedQuestionsPanel.classList.remove('hidden');
+      suggestedQuestionsStatus.textContent = emptyMessage;
+      suggestedQuestionsStatus.classList.remove('hidden');
+      suggestedQuestionsStatus.style.color = '#93c5fd';
+    } else {
+      suggestedQuestionsPanel.classList.add('hidden');
+      suggestedQuestionsStatus.textContent = '';
+      suggestedQuestionsStatus.classList.add('hidden');
+    }
     return;
   }
 
   suggestedQuestionsPanel.classList.remove('hidden');
+  suggestedQuestionsStatus.textContent = '';
+  suggestedQuestionsStatus.classList.add('hidden');
   suggestedQuestionsEl.innerHTML = usableQuestions
     .map(
       (question) => `
@@ -299,6 +354,65 @@ async function loadDocuments() {
   }
 }
 
+async function loadSuggestedQuestionsForDocument(documentId) {
+  if (!documentId) {
+    renderSuggestedQuestions([]);
+    return;
+  }
+
+  suggestedQuestionsPanel.classList.remove('hidden');
+  suggestedQuestionsStatus.textContent = 'Loading suggested questions...';
+  suggestedQuestionsStatus.classList.remove('hidden');
+  suggestedQuestionsEl.innerHTML = '';
+  suggestedQuestionsLoader.classList.remove('hidden');
+
+  try {
+    const response = await fetch(`/api/suggested-questions?documentId=${documentId}`);
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error || 'Failed to load suggested questions.');
+    }
+
+    renderSuggestedQuestions(payload.questions || [], {
+      showEmptyState: true,
+      emptyMessage: 'No suggested questions are available for this document yet.'
+    });
+  } catch (error) {
+    setStatus(askStatus, error.message, true);
+    renderSuggestedQuestions([], {
+      showEmptyState: true,
+      emptyMessage: 'Unable to load suggested questions right now.'
+    });
+  } finally {
+    suggestedQuestionsLoader.classList.add('hidden');
+    suggestedQuestionsStatus.textContent = '';
+    suggestedQuestionsStatus.classList.add('hidden');
+  }
+}
+
+async function loadSummaryForDocument(documentId) {
+  if (!documentId) {
+    documentSummaryEl.textContent = 'Upload a document to see its summary.';
+    return;
+  }
+
+  documentSummaryEl.textContent = 'Loading summary...';
+
+  try {
+    const response = await fetch(`/api/document-summary?documentId=${documentId}`);
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error || 'Failed to load document summary.');
+    }
+
+    documentSummaryEl.textContent = payload.summary || 'No summary was generated.';
+  } catch (error) {
+    documentSummaryEl.textContent = `Summary unavailable: ${error.message}`;
+  }
+}
+
 async function loadTemplates() {
   try {
     const response = await fetch('/api/templates');
@@ -318,8 +432,7 @@ async function loadTemplates() {
 uploadForm.addEventListener('submit', async (event) => {
   event.preventDefault();
 
-  const fileInput = document.getElementById('document');
-  const file = fileInput.files?.[0];
+  const file = documentInput.files?.[0];
 
   if (!file) {
     setStatus(uploadStatus, 'Choose a file first.', true);
@@ -330,6 +443,14 @@ uploadForm.addEventListener('submit', async (event) => {
   formData.append('document', file);
 
   setStatus(uploadStatus, 'Uploading and indexing document...');
+  uploadLoader.classList.remove('hidden');
+  suggestedQuestionsPanel.classList.remove('hidden');
+  suggestedQuestionsStatus.textContent = 'Preparing suggested questions...';
+  suggestedQuestionsStatus.classList.remove('hidden');
+  suggestedQuestionsEl.innerHTML = '';
+  suggestedQuestionsLoader.classList.remove('hidden');
+  documentSummaryEl.textContent = 'Generating summary...';
+  resetQuestionAndAnswer();
 
   try {
     const response = await fetch('/api/upload', {
@@ -344,6 +465,10 @@ uploadForm.addEventListener('submit', async (event) => {
 
     setStatus(uploadStatus, `Indexed ${payload.originalName} in ${payload.documentStoreProvider || 'OCI vector store'}.`);
     renderSuggestedQuestions(payload.suggestedQuestions || []);
+    documentSummaryEl.textContent = payload.summary || 'No summary was generated.';
+    suggestedQuestionsLoader.classList.add('hidden');
+    suggestedQuestionsStatus.textContent = '';
+    suggestedQuestionsStatus.classList.add('hidden');
 
     if (payload.suggestionError) {
       setStatus(
@@ -352,11 +477,43 @@ uploadForm.addEventListener('submit', async (event) => {
       );
     }
 
-    fileInput.value = '';
+    if (payload.summaryError) {
+      documentSummaryEl.textContent = `Summary unavailable: ${payload.summaryError}`;
+    }
+
+    documentInput.value = '';
+    latestDocumentId = payload.documentId || null;
+    selectedDocumentEl.textContent = latestDocumentId
+      ? `Selected: ${payload.originalName}`
+      : 'Selected: No file selected';
+    if (!payload.suggestedQuestions || payload.suggestedQuestions.length === 0) {
+      await loadSuggestedQuestionsForDocument(latestDocumentId);
+    }
     await loadDocuments();
   } catch (error) {
     setStatus(uploadStatus, error.message, true);
+    documentSummaryEl.textContent = 'Summary unavailable due to upload error.';
+    suggestedQuestionsLoader.classList.add('hidden');
+    suggestedQuestionsStatus.textContent = '';
+    suggestedQuestionsStatus.classList.add('hidden');
+  } finally {
+    uploadLoader.classList.add('hidden');
   }
+});
+
+documentInput.addEventListener('change', () => {
+  const hasFile = documentInput.files?.length > 0;
+
+  if (!hasFile) {
+    return;
+  }
+
+  suggestedQuestionsPanel.classList.remove('hidden');
+  suggestedQuestionsStatus.textContent = 'Preparing suggested questions...';
+  suggestedQuestionsStatus.classList.remove('hidden');
+  suggestedQuestionsEl.innerHTML = '';
+  documentSummaryEl.textContent = 'Generating summary...';
+  resetQuestionAndAnswer();
 });
 
 suggestedQuestionsEl.addEventListener('click', (event) => {
@@ -459,6 +616,11 @@ async function askQuestion(questionValue) {
     return;
   }
 
+  if (!latestDocumentId) {
+    setStatus(askStatus, 'Upload a document before asking a question.', true);
+    return;
+  }
+
   questionInput.value = question;
   setStatus(askStatus, 'Searching chunks and asking the LLM...');
   answerEl.textContent = 'Loading...';
@@ -470,7 +632,7 @@ async function askQuestion(questionValue) {
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ question, topK })
+      body: JSON.stringify({ question, topK, documentId: latestDocumentId })
     });
 
     const payload = await response.json();
@@ -497,6 +659,33 @@ refreshDocumentsButton.addEventListener('click', () => {
   loadDocuments();
 });
 
+documentsEl.addEventListener('click', (event) => {
+  const item = event.target.closest('.document-item.selectable');
+
+  if (!item) {
+    return;
+  }
+
+  const documentId = Number(item.dataset.documentId);
+  const documentName = item.dataset.documentName || 'Selected document';
+
+  if (!Number.isFinite(documentId)) {
+    return;
+  }
+
+  latestDocumentId = documentId;
+  selectedDocumentEl.textContent = `Selected: ${documentName}`;
+  resetQuestionAndAnswer();
+  loadSuggestedQuestionsForDocument(latestDocumentId);
+  loadSummaryForDocument(latestDocumentId);
+  documentsEl.querySelectorAll('.document-item.selectable').forEach((row) => {
+    row.classList.toggle('active', row === item);
+  });
+});
+
 setActivePage(window.location.hash.replace('#', ''), false);
 loadDocuments();
 loadTemplates();
+selectedDocumentEl.textContent = 'Selected: No file selected';
+uploadLoader.classList.add('hidden');
+suggestedQuestionsLoader.classList.add('hidden');

@@ -31,7 +31,9 @@
           <h2>Document Q&amp;A</h2>
         </div>
 
-        <div class="grid">
+        <div class="home-layout">
+          <div class="home-main">
+            <div class="grid">
           <article class="card">
             <h2>1. Upload document</h2>
             <form id="upload-form">
@@ -39,12 +41,24 @@
               <button type="submit">Upload and Index</button>
             </form>
             <p id="upload-status" class="status"></p>
+            <div id="upload-loader" class="loader hidden" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+          <div class="selected-document" id="selected-document">Selected: No file selected</div>
           </article>
 
           <article class="card">
             <h2>2. Ask question</h2>
             <div id="suggested-questions-panel" class="suggested-questions-panel hidden">
               <h3>Suggested questions</h3>
+              <p id="suggested-questions-status" class="status hidden"></p>
+              <div id="suggested-questions-loader" class="loader hidden" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
               <div id="suggested-questions" class="suggested-questions"></div>
             </div>
             <form id="ask-form">
@@ -56,24 +70,31 @@
             </form>
             <p id="ask-status" class="status"></p>
           </article>
+            </div>
+
+            <section class="card">
+              <h2>Document summary</h2>
+              <p id="document-summary" class="answer summary">Upload a document to see its summary.</p>
+            </section>
+
+            <section class="card">
+              <h2>Answer</h2>
+              <pre id="answer" class="answer">No answer yet.</pre>
+              <div>
+                <h3>Sources</h3>
+                <ul id="sources" class="sources"></ul>
+              </div>
+            </section>
+          </div>
+
+          <aside class="card documents-panel">
+            <div class="documents-header">
+              <h2>Indexed documents</h2>
+              <button id="refresh-documents" type="button">Refresh</button>
+            </div>
+            <ul id="documents" class="documents"></ul>
+          </aside>
         </div>
-
-        <section class="card">
-          <h2>Answer</h2>
-          <pre id="answer" class="answer">No answer yet.</pre>
-          <div>
-            <h3>Sources</h3>
-            <ul id="sources" class="sources"></ul>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="documents-header">
-            <h2>Indexed documents</h2>
-            <button id="refresh-documents" type="button">Refresh</button>
-          </div>
-          <ul id="documents" class="documents"></ul>
-        </section>
       </section>
 
       <section id="validation-page" class="page" data-page-panel="validation">

@@ -6,7 +6,13 @@ import multer from 'multer';
 import { config, validateConfig } from './config.js';
 import { closeOracle, initializeOracle } from './db/oracle.js';
 import { isSupportedFile } from './services/documentParser.js';
-import { answerQuestion, ingestDocument, listDocuments } from './services/ragService.js';
+import {
+  answerQuestion,
+  ingestDocument,
+  listDocuments,
+  suggestQuestionsForDocument,
+  summarizeDocument
+} from './services/ragService.js';
 import {
   ingestTemplate,
   listTemplates,
@@ -118,16 +124,38 @@ app.post('/api/validate', upload.single('document'), async (request, response) =
 app.post('/api/ask', async (request, response) => {
   try {
     const question = String(request.body?.question || '').trim();
+    const documentId = request.body?.documentId ? Number(request.body.documentId) : null;
 
     if (!question) {
       response.status(400).json({ error: 'Question is required.' });
       return;
     }
 
-    const result = await answerQuestion(question, request.body?.topK);
+    const result = await answerQuestion(question, request.body?.topK, documentId);
     response.json(result);
   } catch (error) {
     response.status(500).json({ error: error.message || 'Question answering failed.' });
+  }
+});
+
+app.get('/api/suggested-questions', async (request, response) => {
+  try {
+    const documentId = request.query?.documentId ? Number(request.query.documentId) : null;
+    const limit = Number(request.query?.limit || 3);
+    const result = await suggestQuestionsForDocument(documentId, limit);
+    response.json(result);
+  } catch (error) {
+    response.status(500).json({ error: error.message || 'Failed to load suggested questions.' });
+  }
+});
+
+app.get('/api/document-summary', async (request, response) => {
+  try {
+    const documentId = request.query?.documentId ? Number(request.query.documentId) : null;
+    const result = await summarizeDocument(documentId);
+    response.json(result);
+  } catch (error) {
+    response.status(500).json({ error: error.message || 'Failed to load document summary.' });
   }
 });
 
