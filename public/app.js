@@ -7,6 +7,7 @@ const askStatus = document.getElementById('ask-status');
 const templateStatus = document.getElementById('template-status');
 const validationStatus = document.getElementById('validation-status');
 const answerEl = document.getElementById('answer');
+const answerSection = document.getElementById('answer-section');
 const validationResultEl = document.getElementById('validation-result');
 const documentSummaryEl = document.getElementById('document-summary');
 const sourcesEl = document.getElementById('sources');
@@ -704,6 +705,10 @@ async function askQuestion(questionValue) {
     answerEl.textContent = payload.answer || 'No answer returned.';
     renderSources(payload.citations || []);
     setStatus(askStatus, 'Done.');
+    answerSection.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start'
+    });
   } catch (error) {
     answerEl.textContent = 'Failed to get an answer.';
     renderSources([]);
