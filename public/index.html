@@ -73,15 +73,24 @@
               <textarea id="question" rows="5" placeholder="Ask something about the uploaded document..." required></textarea>
               <div class="ask-controls">
                 <label for="topk">
-                  <span>Top K chunks</span>
+                  <span class="control-label">
+                    Top K chunks
+                    <span class="help-tip" tabindex="0" data-tooltip="How many relevant document chunks to retrieve before answering. Use more when answers may span multiple sections.">?</span>
+                  </span>
                   <input id="topk" type="number" min="1" max="10" value="4" />
                 </label>
                 <label for="temperature">
-                  <span>Temperature</span>
+                  <span class="control-label">
+                    Temperature
+                    <span class="help-tip" tabindex="0" data-tooltip="Controls randomness. Lower values make answers more consistent and factual; higher values make them more varied.">?</span>
+                  </span>
                   <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.2" />
                 </label>
                 <label for="top-p">
-                  <span>Top P</span>
+                  <span class="control-label">
+                    Top P
+                    <span class="help-tip" tabindex="0" data-tooltip="Limits the pool of likely words the model can choose from. Lower values are more focused; higher values are more flexible.">?</span>
+                  </span>
                   <input id="top-p" type="number" min="0" max="1" step="0.05" value="0.9" />
                 </label>
               </div>
