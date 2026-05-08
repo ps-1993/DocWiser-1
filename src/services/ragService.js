@@ -1,24 +1,64 @@
 import fs from 'node:fs/promises';
-import { config } from '../config.js';
+import { config, DOCUMENT_STORE_PROVIDERS, normalizeDocumentStoreProvider } from '../config.js';
 import {
   createDocument,
+  deleteDocumentChunks,
   findDocumentById,
   findDocumentByOriginalName,
   listDocumentChunksById,
   listDocuments,
+  replaceDocumentChunks,
+  searchSimilarChunks,
+  searchSimilarChunksForDocument,
   updateDocumentForReupload,
   updateDocumentOciMetadata,
   updateDocumentStatus
 } from '../db/oracle.js';
 import {
+  embedQuery,
+  embedTexts,
   generateRagAnswer,
   generateDocumentSummary,
   generateSuggestedQuestions
 } from './aiClient.js';
+import { chunkText } from './chunking.js';
 import { extractTextFromFile } from './documentParser.js';
 import { indexFileInVectorStore, searchVectorStore } from './ociVectorStore.js';
 
-export async function ingestDocument(file) {
+function getProvider(value) {
+  const provider = normalizeDocumentStoreProvider(value || config.documentStore.provider);
+
+  if (!Object.values(DOCUMENT_STORE_PROVIDERS).includes(provider)) {
+    throw new Error('Document store provider must be "oracle-db" or "oci-vector-store".');
+  }
+
+  return provider;
+}
+
+function getProviderLabel(provider) {
+  return provider === DOCUMENT_STORE_PROVIDERS.ORACLE_DB ? 'Oracle DB' : 'OCI vector store';
+}
+
+async function indexDocumentInOracle(documentId, cleanedText) {
+  const chunks = chunkText(cleanedText, {
+    chunkSize: config.rag.chunkSize,
+    chunkOverlap: config.rag.chunkOverlap
+  });
+
+  if (chunks.length === 0) {
+    throw new Error('No chunks were generated from the uploaded file.');
+  }
+
+  const embeddings = await embedTexts(chunks.map((chunk) => chunk.text));
+  await replaceDocumentChunks(documentId, chunks, embeddings);
+
+  return {
+    chunkCount: chunks.length
+  };
+}
+
+export async function ingestDocument(file, providerValue = config.documentStore.provider) {
+  const provider = getProvider(providerValue);
   const existing = await findDocumentByOriginalName(file.originalname);
   let documentId = null;
   let previousStoredPath = null;
@@ -32,7 +72,7 @@ export async function ingestDocument(file) {
       storagePath: file.path,
       mimeType: file.mimetype,
       fileSize: file.size,
-      documentStoreProvider: config.documentStore.provider
+      documentStoreProvider: provider
     });
   } else {
     documentId = await createDocument({
@@ -41,7 +81,7 @@ export async function ingestDocument(file) {
       storagePath: file.path,
       mimeType: file.mimetype,
       fileSize: file.size,
-      documentStoreProvider: config.documentStore.provider
+      documentStoreProvider: provider
     });
   }
 
@@ -53,14 +93,29 @@ export async function ingestDocument(file) {
       throw new Error('No readable text was extracted from the uploaded file.');
     }
 
-    const indexedFile = await indexFileInVectorStore(file);
-    await updateDocumentOciMetadata(documentId, {
-      ociFileId: indexedFile.ociFileId,
-      ociVectorStoreFileId: indexedFile.ociVectorStoreFileId,
-      documentStoreProvider: config.documentStore.provider
-    });
+    let indexedFile = null;
+    let chunkCount = 0;
+
+    if (provider === DOCUMENT_STORE_PROVIDERS.OCI_VECTOR_STORE) {
+      await deleteDocumentChunks(documentId);
+      indexedFile = await indexFileInVectorStore(file);
+      await updateDocumentOciMetadata(documentId, {
+        ociFileId: indexedFile.ociFileId,
+        ociVectorStoreFileId: indexedFile.ociVectorStoreFileId,
+        documentStoreProvider: provider
+      });
+    } else {
+      const oracleIndex = await indexDocumentInOracle(documentId, cleanedText);
+      chunkCount = oracleIndex.chunkCount;
+      await updateDocumentOciMetadata(documentId, {
+        ociFileId: null,
+        ociVectorStoreFileId: null,
+        documentStoreProvider: provider
+      });
+    }
+
     await updateDocumentStatus(documentId, 'ready', {
-      chunkCount: 0,
+      chunkCount,
       errorMessage: null
     });
 
@@ -96,11 +151,12 @@ export async function ingestDocument(file) {
       documentId,
       originalName: file.originalname,
       storedName: file.filename,
-      chunkCount: 0,
+      chunkCount,
       status: 'ready',
-      documentStoreProvider: config.documentStore.provider,
-      ociFileId: indexedFile.ociFileId,
-      ociVectorStoreFileId: indexedFile.ociVectorStoreFileId,
+      documentStoreProvider: provider,
+      documentStoreProviderLabel: getProviderLabel(provider),
+      ociFileId: indexedFile?.ociFileId || null,
+      ociVectorStoreFileId: indexedFile?.ociVectorStoreFileId || null,
       suggestedQuestions,
       suggestionError,
       summary,
@@ -116,18 +172,35 @@ export async function ingestDocument(file) {
   }
 }
 
-export async function answerQuestion(question, topK) {
-  const matches = await searchVectorStore(question, topK || config.rag.topK);
+export async function answerQuestion(
+  question,
+  topK,
+  documentId = null,
+  providerValue = config.documentStore.provider,
+  generationOptions = {}
+) {
+  const provider = getProvider(providerValue);
+  let matches = [];
+
+  if (provider === DOCUMENT_STORE_PROVIDERS.OCI_VECTOR_STORE) {
+    matches = await searchVectorStore(question, topK || config.rag.topK);
+  } else {
+    const queryEmbedding = await embedQuery(question);
+    matches = documentId
+      ? await searchSimilarChunksForDocument(documentId, queryEmbedding, topK || config.rag.topK)
+      : await searchSimilarChunks(queryEmbedding, topK || config.rag.topK);
+  }
 
   if (matches.length === 0) {
     return {
-      answer: 'No OCI vector store results were found. Please upload and index a document first.',
+      answer: `No ${getProviderLabel(provider)} results were found. Please upload and index a document first.`,
       citations: [],
-      matches: []
+      matches: [],
+      documentStoreProvider: provider
     };
   }
 
-  const answer = await generateRagAnswer(question, matches);
+  const answer = await generateRagAnswer(question, matches, generationOptions);
 
   return {
     answer,
@@ -137,7 +210,8 @@ export async function answerQuestion(question, topK) {
       chunkIndex: match.chunkIndex,
       score: match.score
     })),
-    matches
+    matches,
+    documentStoreProvider: provider
   };
 }
 

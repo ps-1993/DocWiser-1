@@ -15,7 +15,7 @@ const templateSelect = document.getElementById('template-select');
 const suggestedQuestionsPanel = document.getElementById('suggested-questions-panel');
 const suggestedQuestionsEl = document.getElementById('suggested-questions');
 const suggestedQuestionsStatus = document.getElementById('suggested-questions-status');
-const refreshDocumentsButton = document.getElementById('refresh-documents');
+const sortDocumentsButton = document.getElementById('sort-documents');
 const menuToggle = document.getElementById('menu-toggle');
 const pageMenu = document.getElementById('page-menu');
 const navLinks = Array.from(document.querySelectorAll('[data-page]'));
@@ -25,7 +25,11 @@ const uploadLoader = document.getElementById('upload-loader');
 const suggestedQuestionsLoader = document.getElementById('suggested-questions-loader');
 const documentInput = document.getElementById('document');
 const questionInput = document.getElementById('question');
+const documentStoreProviderInput = document.getElementById('document-store-provider');
+const validationStoreProviderInput = document.getElementById('validation-store-provider');
 let latestDocumentId = null;
+let latestDocuments = [];
+let documentSortMode = 'uploaded-date';
 
 function setStatus(element, text, isError = false) {
   element.textContent = text;
@@ -61,6 +65,45 @@ function formatSummaryLine(value) {
   }
 
   return text.replace(/^here is a summary of the document[^:]*:?\s*/i, 'Summary: ');
+}
+
+function getProviderLabel(provider) {
+  return provider === 'oracle-db' ? 'Local Oracle DB' : 'OCI Vector Store';
+}
+
+function getDocumentCreatedAtMs(document) {
+  const date = new Date(document.CREATED_AT);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function getSortedDocuments(documents) {
+  return [...documents].sort((left, right) => {
+    if (documentSortMode === 'name') {
+      const nameComparison = String(left.ORIGINAL_NAME || '').localeCompare(
+        String(right.ORIGINAL_NAME || ''),
+        undefined,
+        { sensitivity: 'base' }
+      );
+
+      if (nameComparison !== 0) {
+        return nameComparison;
+      }
+    }
+
+    const dateComparison = getDocumentCreatedAtMs(right) - getDocumentCreatedAtMs(left);
+
+    if (dateComparison !== 0) {
+      return dateComparison;
+    }
+
+    return String(left.ORIGINAL_NAME || '').localeCompare(String(right.ORIGINAL_NAME || ''), undefined, {
+      sensitivity: 'base'
+    });
+  });
+}
+
+function updateDocumentSortButton() {
+  sortDocumentsButton.value = documentSortMode;
 }
 
 function setActivePage(pageName, updateHash = true) {
@@ -126,12 +169,14 @@ function renderDocuments(documents) {
         const indexLabel = storeProvider === 'oci-vector-store'
           ? `OCI file: ${document.OCI_FILE_ID || 'pending'}`
           : `Chunks: ${document.CHUNK_COUNT}`;
+        const activeClass = Number(document.ID) === latestDocumentId ? ' active' : '';
 
         return `
-          <li class="document-item selectable" data-document-id="${escapeHtml(document.ID)}" data-document-name="${escapeHtml(document.ORIGINAL_NAME)}">
+          <li class="document-item selectable${activeClass}" data-document-id="${escapeHtml(document.ID)}" data-document-name="${escapeHtml(document.ORIGINAL_NAME)}" data-document-provider="${escapeHtml(storeProvider)}">
             <strong>${escapeHtml(document.ORIGINAL_NAME)}</strong><br />
             <span class="document-summary-line">${escapeHtml(summaryText)}</span><br />
             <span class="muted">Status: ${escapeHtml(document.STATUS)}</span><br />
+            <span class="muted">Provider: ${escapeHtml(getProviderLabel(storeProvider))}</span><br />
             <span class="muted">${escapeHtml(indexLabel)}</span><br />
             <span class="muted">Uploaded at: ${escapeHtml(formatCreatedAt(document.CREATED_AT))}</span><br />
             ${document.ERROR_MESSAGE ? `<br /><span style="color:#fca5a5;">Error: ${escapeHtml(document.ERROR_MESSAGE)}</span>` : ''}
@@ -307,6 +352,10 @@ function renderValidationResult(payload) {
         <span class="${statusClass}">${escapeHtml(result.status || 'warning')}</span>
       </div>
       <div>
+        <p class="muted">Provider</p>
+        <strong>${escapeHtml(getProviderLabel(payload.documentStoreProvider))}</strong>
+      </div>
+      <div>
         <p class="muted">Score</p>
         <strong>${escapeHtml(result.score ?? 'n/a')}/100</strong>
       </div>
@@ -348,7 +397,8 @@ async function loadDocuments() {
       throw new Error(payload.error || 'Failed to load documents.');
     }
 
-    renderDocuments(payload.documents || []);
+    latestDocuments = payload.documents || [];
+    renderDocuments(getSortedDocuments(latestDocuments));
   } catch (error) {
     documentsEl.innerHTML = `<li class="document-item" style="color:#fca5a5;">${error.message}</li>`;
   }
@@ -441,8 +491,9 @@ uploadForm.addEventListener('submit', async (event) => {
 
   const formData = new FormData();
   formData.append('document', file);
+  formData.append('documentStoreProvider', documentStoreProviderInput.value);
 
-  setStatus(uploadStatus, 'Uploading and indexing document...');
+  setStatus(uploadStatus, `Uploading and indexing document in ${getProviderLabel(documentStoreProviderInput.value)}...`);
   uploadLoader.classList.remove('hidden');
   suggestedQuestionsPanel.classList.remove('hidden');
   suggestedQuestionsStatus.textContent = 'Preparing suggested questions...';
@@ -463,7 +514,7 @@ uploadForm.addEventListener('submit', async (event) => {
       throw new Error(payload.error || 'Upload failed.');
     }
 
-    setStatus(uploadStatus, `Indexed ${payload.originalName} in ${payload.documentStoreProvider || 'OCI vector store'}.`);
+    setStatus(uploadStatus, `Indexed ${payload.originalName} in ${getProviderLabel(payload.documentStoreProvider)}.`);
     renderSuggestedQuestions(payload.suggestedQuestions || []);
     documentSummaryEl.textContent = payload.summary || 'No summary was generated.';
     suggestedQuestionsLoader.classList.add('hidden');
@@ -473,7 +524,7 @@ uploadForm.addEventListener('submit', async (event) => {
     if (payload.suggestionError) {
       setStatus(
         uploadStatus,
-        `Indexed ${payload.originalName} in ${payload.documentStoreProvider || 'OCI vector store'}, but suggested questions could not be generated: ${payload.suggestionError}`
+        `Indexed ${payload.originalName} in ${getProviderLabel(payload.documentStoreProvider)}, but suggested questions could not be generated: ${payload.suggestionError}`
       );
     }
 
@@ -508,11 +559,10 @@ documentInput.addEventListener('change', () => {
     return;
   }
 
-  suggestedQuestionsPanel.classList.remove('hidden');
-  suggestedQuestionsStatus.textContent = 'Preparing suggested questions...';
-  suggestedQuestionsStatus.classList.remove('hidden');
+  suggestedQuestionsPanel.classList.add('hidden');
+  suggestedQuestionsStatus.textContent = '';
+  suggestedQuestionsStatus.classList.add('hidden');
   suggestedQuestionsEl.innerHTML = '';
-  documentSummaryEl.textContent = 'Generating summary...';
   resetQuestionAndAnswer();
 });
 
@@ -539,8 +589,9 @@ templateForm.addEventListener('submit', async (event) => {
 
   const formData = new FormData();
   formData.append('template', file);
+  formData.append('documentStoreProvider', validationStoreProviderInput.value);
 
-  setStatus(templateStatus, 'Uploading template, indexing in OCI vector store, and extracting validation rules...');
+  setStatus(templateStatus, `Uploading template, indexing in ${getProviderLabel(validationStoreProviderInput.value)}, and extracting validation rules...`);
 
   try {
     const response = await fetch('/api/templates', {
@@ -553,7 +604,7 @@ templateForm.addEventListener('submit', async (event) => {
       throw new Error(payload.error || 'Template upload failed.');
     }
 
-    setStatus(templateStatus, `Template ready: ${payload.originalName} indexed in ${payload.documentStoreProvider || 'OCI vector store'}.`);
+    setStatus(templateStatus, `Template ready: ${payload.originalName} indexed in ${getProviderLabel(payload.documentStoreProvider)}.`);
     fileInput.value = '';
     await loadTemplates();
     templateSelect.value = String(payload.templateId);
@@ -582,8 +633,9 @@ validateForm.addEventListener('submit', async (event) => {
   const formData = new FormData();
   formData.append('templateId', templateId);
   formData.append('document', file);
+  formData.append('documentStoreProvider', validationStoreProviderInput.value);
 
-  setStatus(validationStatus, 'Indexing document in OCI vector store and validating against template...');
+  setStatus(validationStatus, `Indexing document in ${getProviderLabel(validationStoreProviderInput.value)} and validating against template...`);
   validationResultEl.textContent = 'Loading...';
 
   try {
@@ -610,6 +662,8 @@ async function askQuestion(questionValue) {
   const questionInput = document.getElementById('question');
   const question = String(questionValue ?? questionInput.value).trim();
   const topK = Number(document.getElementById('topk').value || 4);
+  const temperature = Number(document.getElementById('temperature').value || 0.2);
+  const topP = Number(document.getElementById('top-p').value || 0.9);
 
   if (!question) {
     setStatus(askStatus, 'Enter a question first.', true);
@@ -632,7 +686,14 @@ async function askQuestion(questionValue) {
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ question, topK, documentId: latestDocumentId })
+      body: JSON.stringify({
+        question,
+        topK,
+        temperature,
+        topP,
+        documentId: latestDocumentId,
+        documentStoreProvider: documentStoreProviderInput.value
+      })
     });
 
     const payload = await response.json();
@@ -655,8 +716,10 @@ askForm.addEventListener('submit', async (event) => {
   await askQuestion();
 });
 
-refreshDocumentsButton.addEventListener('click', () => {
-  loadDocuments();
+sortDocumentsButton.addEventListener('change', () => {
+  documentSortMode = sortDocumentsButton.value;
+  updateDocumentSortButton();
+  renderDocuments(getSortedDocuments(latestDocuments));
 });
 
 documentsEl.addEventListener('click', (event) => {
@@ -668,12 +731,14 @@ documentsEl.addEventListener('click', (event) => {
 
   const documentId = Number(item.dataset.documentId);
   const documentName = item.dataset.documentName || 'Selected document';
+  const documentProvider = item.dataset.documentProvider || 'oci-vector-store';
 
   if (!Number.isFinite(documentId)) {
     return;
   }
 
   latestDocumentId = documentId;
+  documentStoreProviderInput.value = documentProvider;
   selectedDocumentEl.textContent = `Selected: ${documentName}`;
   resetQuestionAndAnswer();
   loadSuggestedQuestionsForDocument(latestDocumentId);
@@ -687,5 +752,6 @@ setActivePage(window.location.hash.replace('#', ''), false);
 loadDocuments();
 loadTemplates();
 selectedDocumentEl.textContent = 'Selected: No file selected';
+updateDocumentSortButton();
 uploadLoader.classList.add('hidden');
 suggestedQuestionsLoader.classList.add('hidden');

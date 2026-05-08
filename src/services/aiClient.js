@@ -9,6 +9,10 @@ function buildHeaders() {
     headers.Authorization = `Bearer ${config.ai.apiKey}`;
   }
 
+  if (config.ai.projectId) {
+    headers['OpenAi-Project'] = config.ai.projectId;
+  }
+
   return headers;
 }
 
@@ -42,6 +46,34 @@ function normalizeOllamaEmbeddings(response) {
   return [];
 }
 
+function normalizeOciEmbeddings(response) {
+  if (Array.isArray(response?.embeddings)) {
+    return response.embeddings.map((item) => {
+      if (Array.isArray(item)) {
+        return item;
+      }
+
+      if (Array.isArray(item?.floatEmbedding)) {
+        return item.floatEmbedding;
+      }
+
+      if (Array.isArray(item?.embedding)) {
+        return item.embedding;
+      }
+
+      return item;
+    });
+  }
+
+  if (Array.isArray(response?.data)) {
+    return response.data
+      .sort((left, right) => left.index - right.index)
+      .map((item) => item.embedding || item.floatEmbedding);
+  }
+
+  return [];
+}
+
 async function postJson(path, payload) {
   let response;
 
@@ -65,8 +97,32 @@ async function postJson(path, payload) {
   return response.json();
 }
 
+async function postOciInferenceJson(path, payload) {
+  let response;
+
+  try {
+    response = await fetch(`${config.ociGenerativeAi.inferenceBaseUrl}${path}`, {
+      method: 'POST',
+      headers: buildHeaders(),
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    throw new Error(
+      `Failed to reach OCI Generative AI at ${config.ociGenerativeAi.inferenceBaseUrl}: ${error.message}`
+    );
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw buildApiError(response.status, errorText, payload?.servingMode?.modelId);
+  }
+
+  return response.json();
+}
+
 async function generateChatCompletion(messages, options = {}) {
   const temperature = options.temperature ?? config.ai.temperature;
+  const topP = options.topP ?? config.ai.topP;
 
   if (config.ai.provider === 'ollama') {
     const response = await postJson('/api/chat', {
@@ -74,7 +130,8 @@ async function generateChatCompletion(messages, options = {}) {
       messages,
       stream: false,
       options: {
-        temperature
+        temperature,
+        top_p: topP
       }
     });
 
@@ -84,6 +141,7 @@ async function generateChatCompletion(messages, options = {}) {
   const response = await postJson('/chat/completions', {
     model: config.ai.chatModel,
     temperature,
+    top_p: topP,
     messages
   });
 
@@ -168,6 +226,73 @@ function removeDisallowedValidationItems(items) {
   });
 }
 
+function getRequirementText(item) {
+  if (typeof item === 'string') {
+    return item;
+  }
+
+  if (!item || typeof item !== 'object') {
+    return '';
+  }
+
+  return [
+    item.requirement,
+    item.field,
+    item.section,
+    item.rule,
+    item.check,
+    item.reason
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function countUniqueValidationItems(items) {
+  const seen = new Set();
+
+  for (const item of normalizeArray(items)) {
+    const key = normalizeWhitespace(getRequirementText(item)).toLowerCase();
+
+    if (key) {
+      seen.add(key);
+    }
+  }
+
+  return seen.size;
+}
+
+function calculateValidationScore(rules, validation, issueGroups) {
+  const hardIssueCount = countUniqueValidationItems([
+    ...normalizeArray(issueGroups.failedChecks),
+    ...normalizeArray(issueGroups.missingFields),
+    ...normalizeArray(issueGroups.sectionIssues)
+  ]);
+  const warningCount = countUniqueValidationItems(issueGroups.warnings);
+  const issueWeight = hardIssueCount + warningCount * 0.5;
+
+  if (issueWeight === 0) {
+    return 100;
+  }
+
+  const explicitRequirementCount =
+    normalizeArray(rules.requiredSections).length +
+    normalizeArray(rules.requiredFields).length +
+    normalizeArray(rules.validationChecklist).length;
+  const observedRequirementCount =
+    normalizeArray(validation.passedChecks).length +
+    hardIssueCount +
+    warningCount;
+  const totalRequirementCount = Math.max(explicitRequirementCount, observedRequirementCount, issueWeight, 1);
+  const proportionalScore = Math.round(Math.max(0, 100 - (issueWeight / totalRequirementCount) * 100));
+  const modelScore = Math.max(0, Math.min(Number(validation.score) || 0, 100));
+
+  if (modelScore === 0 && normalizeArray(validation.passedChecks).length > 0) {
+    return proportionalScore;
+  }
+
+  return Math.min(modelScore || proportionalScore, proportionalScore);
+}
+
 function assertEmbeddingDimensions(embeddings) {
   embeddings.forEach((embedding, index) => {
     if (!Array.isArray(embedding)) {
@@ -182,7 +307,7 @@ function assertEmbeddingDimensions(embeddings) {
   });
 }
 
-export async function embedTexts(texts) {
+export async function embedTexts(texts, options = {}) {
   if (!Array.isArray(texts) || texts.length === 0) {
     return [];
   }
@@ -218,6 +343,28 @@ export async function embedTexts(texts) {
     return embeddings;
   }
 
+  if (config.ai.rawProvider === 'oci') {
+    const payload = {
+      compartmentId: config.ociGenerativeAi.compartmentId,
+      servingMode: {
+        servingType: 'ON_DEMAND',
+        modelId: config.ai.embeddingModel
+      },
+      inputs: texts,
+      inputType: options.inputType || config.ociGenerativeAi.documentEmbeddingInputType,
+      truncate: 'END'
+    };
+
+    if (config.rag.embeddingDimension) {
+      payload.outputDimensions = config.rag.embeddingDimension;
+    }
+
+    const response = await postOciInferenceJson('/20231130/actions/embedText', payload);
+    const embeddings = normalizeOciEmbeddings(response);
+    assertEmbeddingDimensions(embeddings);
+    return embeddings;
+  }
+
   const payload = {
     model: config.ai.embeddingModel,
     input: texts
@@ -233,11 +380,13 @@ export async function embedTexts(texts) {
 }
 
 export async function embedQuery(text) {
-  const embeddings = await embedTexts([text]);
+  const embeddings = await embedTexts([text], {
+    inputType: config.ociGenerativeAi.queryEmbeddingInputType
+  });
   return embeddings[0];
 }
 
-export async function generateRagAnswer(question, contexts) {
+export async function generateRagAnswer(question, contexts, options = {}) {
   const trimmedContexts = [];
   let totalChars = 0;
 
@@ -264,7 +413,10 @@ export async function generateRagAnswer(question, contexts) {
     }
   ];
 
-  return generateChatCompletion(messages);
+  return generateChatCompletion(messages, {
+    temperature: options.temperature,
+    topP: options.topP
+  });
 }
 
 export async function generateSuggestedQuestions(documentText) {
@@ -433,7 +585,7 @@ Explain your decision clearly. Every failed or warning item must include:
 Return a JSON object with this exact shape:
 {
   "status": "pass | fail | warning",
-  "score": 0,
+  "score": 85,
   "summary": "plain-language explanation of the validation outcome",
   "passedChecks": [
     {
@@ -502,13 +654,18 @@ ${truncateText(documentText, Math.floor(config.rag.maxContextChars / 2))}`
   const status = ['pass', 'fail', 'warning'].includes(normalizedStatus)
     ? normalizedStatus
     : 'warning';
-  const score = Math.max(0, Math.min(Number(validation.score) || 0, 100));
 
   const failedChecks = removeDisallowedValidationItems(validation.failedChecks);
   const warnings = removeDisallowedValidationItems(validation.warnings);
   const missingFields = removeDisallowedValidationItems(validation.missingFields);
   const sectionIssues = removeDisallowedValidationItems(validation.sectionIssues);
   const formatIssues = [];
+  const calculatedScore = calculateValidationScore(rules, validation, {
+    failedChecks,
+    warnings,
+    missingFields,
+    sectionIssues
+  });
   const hasIssues =
     failedChecks.length > 0 ||
     warnings.length > 0 ||
@@ -517,7 +674,7 @@ ${truncateText(documentText, Math.floor(config.rag.maxContextChars / 2))}`
 
   return {
     status: hasIssues ? status : 'pass',
-    score: hasIssues ? score : 100,
+    score: hasIssues ? calculatedScore : 100,
     summary: hasIssues
       ? String(validation.summary || '')
       : 'No required template details were reported missing.',

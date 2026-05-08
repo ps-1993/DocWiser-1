@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import multer from 'multer';
-import { config, validateConfig } from './config.js';
+import { config, normalizeDocumentStoreProvider, validateConfig } from './config.js';
 import { closeOracle, initializeOracle } from './db/oracle.js';
 import { isSupportedFile } from './services/documentParser.js';
 import {
@@ -54,6 +54,20 @@ const upload = multer({
   }
 });
 
+function resolveDocumentStoreProvider(value) {
+  return normalizeDocumentStoreProvider(value || config.documentStore.provider);
+}
+
+function resolveNumberOption(value, fallback, { min, max }) {
+  const parsedValue = Number(value);
+
+  if (!Number.isFinite(parsedValue)) {
+    return fallback;
+  }
+
+  return Math.max(min, Math.min(parsedValue, max));
+}
+
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(publicDir));
 
@@ -77,7 +91,10 @@ app.post('/api/upload', upload.single('document'), async (request, response) => 
       return;
     }
 
-    const result = await ingestDocument(request.file);
+    const result = await ingestDocument(
+      request.file,
+      resolveDocumentStoreProvider(request.body?.documentStoreProvider)
+    );
     response.status(201).json(result);
   } catch (error) {
     response.status(500).json({ error: error.message || 'Upload failed.' });
@@ -100,7 +117,10 @@ app.post('/api/templates', upload.single('template'), async (request, response) 
       return;
     }
 
-    const result = await ingestTemplate(request.file);
+    const result = await ingestTemplate(
+      request.file,
+      resolveDocumentStoreProvider(request.body?.documentStoreProvider)
+    );
     response.status(201).json(result);
   } catch (error) {
     response.status(500).json({ error: error.message || 'Template upload failed.' });
@@ -114,7 +134,11 @@ app.post('/api/validate', upload.single('document'), async (request, response) =
       return;
     }
 
-    const result = await validateDocumentAgainstTemplate(request.body?.templateId, request.file);
+    const result = await validateDocumentAgainstTemplate(
+      request.body?.templateId,
+      request.file,
+      resolveDocumentStoreProvider(request.body?.documentStoreProvider)
+    );
     response.json(result);
   } catch (error) {
     response.status(500).json({ error: error.message || 'Template validation failed.' });
@@ -131,7 +155,22 @@ app.post('/api/ask', async (request, response) => {
       return;
     }
 
-    const result = await answerQuestion(question, request.body?.topK, documentId);
+    const result = await answerQuestion(
+      question,
+      request.body?.topK,
+      documentId,
+      resolveDocumentStoreProvider(request.body?.documentStoreProvider),
+      {
+        temperature: resolveNumberOption(request.body?.temperature, config.ai.temperature, {
+          min: 0,
+          max: 2
+        }),
+        topP: resolveNumberOption(request.body?.topP, config.ai.topP, {
+          min: 0,
+          max: 1
+        })
+      }
+    );
     response.json(result);
   } catch (error) {
     response.status(500).json({ error: error.message || 'Question answering failed.' });

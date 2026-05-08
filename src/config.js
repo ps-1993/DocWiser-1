@@ -16,12 +16,57 @@ const OPENAI_DEFAULT_CHAT_MODEL = 'gpt-4o-mini';
 const OLLAMA_DEFAULT_CHAT_MODEL = 'llama3.1';
 const OPENAI_DEFAULT_EMBEDDING_DIMENSION = 1536;
 const OLLAMA_DEFAULT_EMBEDDING_DIMENSION = 4096;
+const rawAiProvider = String(process.env.AI_PROVIDER || 'ollama').trim().toLowerCase();
+export const DOCUMENT_STORE_PROVIDERS = {
+  ORACLE_DB: 'oracle-db',
+  OCI_VECTOR_STORE: 'oci-vector-store'
+};
 
 function normalizeAiProvider(value) {
   const provider = String(value || 'ollama').trim().toLowerCase();
 
-  if (provider === 'openai-compatible') {
+  if (['openai-compatible', 'oci', 'oci-generative-ai'].includes(provider)) {
     return 'openai';
+  }
+
+  return provider;
+}
+
+function resolveOpenAiCompatibleBaseUrl(providerValue) {
+  const rawProvider = String(providerValue || '').trim().toLowerCase();
+
+  if (['oci', 'oci-generative-ai'].includes(rawProvider)) {
+    return (
+      process.env.OCI_GENERATIVE_AI_BASE_URL ||
+      process.env.OCI_OPENAI_BASE_URL ||
+      process.env.OPENAI_BASE_URL ||
+      process.env.AI_BASE_URL ||
+      OPENAI_DEFAULT_BASE_URL
+    ).replace(/\/$/, '');
+  }
+
+  return (
+    process.env.OPENAI_BASE_URL ||
+    process.env.OCI_GENERATIVE_AI_BASE_URL ||
+    process.env.OCI_OPENAI_BASE_URL ||
+    process.env.AI_BASE_URL ||
+    OPENAI_DEFAULT_BASE_URL
+  ).replace(/\/$/, '');
+}
+
+function resolveOpenAiCompatibleApiKey() {
+  return process.env.OPENAI_API_KEY || process.env.OCI_GENERATIVE_AI_API_KEY || '';
+}
+
+export function normalizeDocumentStoreProvider(value) {
+  const provider = String(value || DOCUMENT_STORE_PROVIDERS.OCI_VECTOR_STORE).trim().toLowerCase();
+
+  if (['oracle', 'local-oracle', 'local-oracle-db', 'oracle-db'].includes(provider)) {
+    return DOCUMENT_STORE_PROVIDERS.ORACLE_DB;
+  }
+
+  if (['oci', 'oci-vector', 'oci-vector-store'].includes(provider)) {
+    return DOCUMENT_STORE_PROVIDERS.OCI_VECTOR_STORE;
   }
 
   return provider;
@@ -63,7 +108,7 @@ function resolveEmbeddingDimension(value, { provider, embeddingModel }) {
   return parsedValue;
 }
 
-const aiProvider = normalizeAiProvider(process.env.AI_PROVIDER);
+const aiProvider = normalizeAiProvider(rawAiProvider);
 const resolvedEmbeddingModel = resolveAiModel(process.env.EMBEDDING_MODEL, {
   provider: aiProvider,
   openaiDefault: OPENAI_DEFAULT_EMBEDDING_MODEL,
@@ -92,7 +137,7 @@ export const config = {
   maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES || 25 * 1024 * 1024),
   uploadDir: resolveProjectPath(process.env.UPLOAD_DIR || 'uploads'),
   documentStore: {
-    provider: String(process.env.DOCUMENT_STORE_PROVIDER || 'oci-vector-store').trim().toLowerCase()
+    provider: normalizeDocumentStoreProvider(process.env.DOCUMENT_STORE_PROVIDER)
   },
   oracle: {
     user: process.env.ORACLE_USER || '',
@@ -104,15 +149,20 @@ export const config = {
   },
   ai: {
     provider: aiProvider,
+    rawProvider: rawAiProvider,
     baseUrl: (
       aiProvider === 'ollama'
         ? process.env.OLLAMA_BASE_URL || process.env.AI_BASE_URL || OLLAMA_DEFAULT_BASE_URL
-        : process.env.OPENAI_BASE_URL || process.env.AI_BASE_URL || OPENAI_DEFAULT_BASE_URL
+        : resolveOpenAiCompatibleBaseUrl(rawAiProvider)
     ).replace(/\/$/, ''),
-    apiKey: aiProvider === 'openai' ? process.env.OPENAI_API_KEY || '' : '',
+    apiKey: aiProvider === 'openai' ? resolveOpenAiCompatibleApiKey() : '',
+    projectId: aiProvider === 'openai'
+      ? String(process.env.OCI_GENERATIVE_AI_PROJECT_ID || '').trim()
+      : '',
     embeddingModel: resolvedEmbeddingModel,
     chatModel: resolvedChatModel,
-    temperature: Number(process.env.CHAT_TEMPERATURE || 0.2)
+    temperature: Number(process.env.CHAT_TEMPERATURE || 0.2),
+    topP: Number(process.env.CHAT_TOP_P || 0.9)
   },
   rag: {
     chunkSize: Number(process.env.CHUNK_SIZE || 1200),
@@ -132,6 +182,21 @@ export const config = {
     filePurpose: process.env.OCI_FILE_PURPOSE || 'assistants',
     pollIntervalMs: Number(process.env.OCI_VECTOR_STORE_POLL_INTERVAL_MS || 2000),
     pollTimeoutMs: Number(process.env.OCI_VECTOR_STORE_POLL_TIMEOUT_MS || 120000)
+  },
+  ociGenerativeAi: {
+    inferenceBaseUrl: String(
+      process.env.OCI_GENERATIVE_AI_INFERENCE_BASE_URL ||
+      (process.env.OCI_REGION
+        ? `https://inference.generativeai.${process.env.OCI_REGION}.oci.oraclecloud.com`
+        : '')
+    ).trim().replace(/\/$/, ''),
+    compartmentId: String(process.env.OCI_COMPARTMENT_ID || '').trim(),
+    documentEmbeddingInputType: String(
+      process.env.OCI_DOCUMENT_EMBEDDING_INPUT_TYPE || 'SEARCH_DOCUMENT'
+    ).trim(),
+    queryEmbeddingInputType: String(
+      process.env.OCI_QUERY_EMBEDDING_INPUT_TYPE || 'SEARCH_QUERY'
+    ).trim()
   }
 };
 
@@ -139,11 +204,11 @@ export function validateConfig() {
   const missing = [];
 
   if (!['openai', 'ollama'].includes(config.ai.provider)) {
-    throw new Error('AI_PROVIDER must be either "openai" or "ollama".');
+    throw new Error('AI_PROVIDER must be "openai", "ollama", or "oci".');
   }
 
-  if (!['oci-vector-store'].includes(config.documentStore.provider)) {
-    throw new Error('DOCUMENT_STORE_PROVIDER must be "oci-vector-store".');
+  if (!Object.values(DOCUMENT_STORE_PROVIDERS).includes(config.documentStore.provider)) {
+    throw new Error('DOCUMENT_STORE_PROVIDER must be "oracle-db" or "oci-vector-store".');
   }
 
   if (!config.oracle.user) missing.push('ORACLE_USER');
@@ -151,28 +216,19 @@ export function validateConfig() {
   if (!config.oracle.connectString) missing.push('ORACLE_CONNECT_STRING');
   if (!config.ai.embeddingModel) missing.push('EMBEDDING_MODEL');
   if (!config.ai.chatModel) missing.push('CHAT_MODEL');
+  if (config.ai.rawProvider === 'oci') {
+    if (!config.ociGenerativeAi.inferenceBaseUrl) {
+      missing.push('OCI_GENERATIVE_AI_INFERENCE_BASE_URL or OCI_REGION');
+    }
+
+    if (!config.ociGenerativeAi.compartmentId) {
+      missing.push('OCI_COMPARTMENT_ID');
+    }
+  }
 
   const requiresApiKey = config.ai.provider === 'openai' && /api\.openai\.com/i.test(config.ai.baseUrl);
   if (requiresApiKey && !config.ai.apiKey) {
     missing.push('OPENAI_API_KEY');
-  }
-
-  if (config.documentStore.provider === 'oci-vector-store') {
-    if (!config.ociVectorStore.region && !config.ociVectorStore.generativeAiBaseUrl) {
-      missing.push('OCI_REGION or OCI_GENERATIVE_AI_BASE_URL');
-    }
-
-    if (!config.ociVectorStore.apiKey) {
-      missing.push('OCI_GENERATIVE_AI_API_KEY');
-    }
-
-    if (!config.ociVectorStore.projectId) {
-      missing.push('OCI_GENERATIVE_AI_PROJECT_ID');
-    }
-
-    if (!config.ociVectorStore.vectorStoreId) {
-      missing.push('OCI_VECTOR_STORE_ID');
-    }
   }
 
   if (missing.length > 0) {

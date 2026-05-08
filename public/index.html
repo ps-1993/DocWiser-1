@@ -29,6 +29,13 @@
       <section id="home-page" class="page active" data-page-panel="home">
         <div class="section-header">
           <h2>Document Q&amp;A</h2>
+          <div class="provider-control">
+            <label for="document-store-provider">Vector store provider</label>
+            <select id="document-store-provider" name="documentStoreProvider">
+              <option value="oracle-db" selected>Oracle DB</option>
+              <option value="oci-vector-store">OCI Vector Store</option>
+            </select>
+          </div>
         </div>
 
         <div class="home-layout">
@@ -64,8 +71,20 @@
             <form id="ask-form">
               <label for="question">Question</label>
               <textarea id="question" rows="5" placeholder="Ask something about the uploaded document..." required></textarea>
-              <label for="topk">Top K chunks</label>
-              <input id="topk" type="number" min="1" max="10" value="4" />
+              <div class="ask-controls">
+                <label for="topk">
+                  <span>Top K chunks</span>
+                  <input id="topk" type="number" min="1" max="10" value="4" />
+                </label>
+                <label for="temperature">
+                  <span>Temperature</span>
+                  <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.2" />
+                </label>
+                <label for="top-p">
+                  <span>Top P</span>
+                  <input id="top-p" type="number" min="0" max="1" step="0.05" value="0.9" />
+                </label>
+              </div>
               <button type="submit">Ask</button>
             </form>
             <p id="ask-status" class="status"></p>
@@ -90,7 +109,13 @@
           <aside class="card documents-panel">
             <div class="documents-header">
               <h2>Indexed documents</h2>
-              <button id="refresh-documents" type="button">Refresh</button>
+              <label class="document-sort-control" for="sort-documents">
+                <span>Sort</span>
+                <select id="sort-documents">
+                  <option value="uploaded-date" selected>Uploaded date</option>
+                  <option value="name">Document name</option>
+                </select>
+              </label>
             </div>
             <ul id="documents" class="documents"></ul>
           </aside>
@@ -100,6 +125,13 @@
       <section id="validation-page" class="page" data-page-panel="validation">
         <div class="section-header">
           <h2>Template validation</h2>
+          <div class="provider-control">
+            <label for="validation-store-provider">Vector store provider</label>
+            <select id="validation-store-provider" name="documentStoreProvider">
+              <option value="oracle-db" selected>Oracle DB</option>
+              <option value="oci-vector-store">OCI Vector Store</option>
+            </select>
+          </div>
         </div>
 
         <div class="validation-layout">

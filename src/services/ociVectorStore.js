@@ -9,6 +9,30 @@ function getBaseUrl() {
   return `https://inference.generativeai.${config.ociVectorStore.region}.oci.oraclecloud.com/openai/v1`;
 }
 
+function assertOciVectorStoreConfig() {
+  const missing = [];
+
+  if (!config.ociVectorStore.region && !config.ociVectorStore.generativeAiBaseUrl) {
+    missing.push('OCI_REGION or OCI_GENERATIVE_AI_BASE_URL');
+  }
+
+  if (!config.ociVectorStore.apiKey) {
+    missing.push('OCI_GENERATIVE_AI_API_KEY');
+  }
+
+  if (!config.ociVectorStore.projectId) {
+    missing.push('OCI_GENERATIVE_AI_PROJECT_ID');
+  }
+
+  if (!config.ociVectorStore.vectorStoreId) {
+    missing.push('OCI_VECTOR_STORE_ID');
+  }
+
+  if (missing.length > 0) {
+    throw new Error(`Missing OCI vector store configuration: ${missing.join(', ')}`);
+  }
+}
+
 function buildHeaders(headers = {}) {
   return {
     ...headers,
@@ -170,6 +194,7 @@ async function waitForVectorStoreFile(vectorStoreFile) {
 }
 
 export async function indexFileInVectorStore(file) {
+  assertOciVectorStoreConfig();
   const uploadedFile = await uploadFile(file);
   const fileId = uploadedFile.id;
 
@@ -188,6 +213,7 @@ export async function indexFileInVectorStore(file) {
 }
 
 export async function searchVectorStore(question, topK) {
+  assertOciVectorStoreConfig();
   const safeTopK = Math.max(1, Math.min(Number(topK) || config.rag.topK, 20));
   const response = await postJson(
     `/vector_stores/${encodeURIComponent(config.ociVectorStore.vectorStoreId)}/search`,
