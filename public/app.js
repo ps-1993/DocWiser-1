@@ -28,6 +28,8 @@ const documentInput = document.getElementById('document');
 const questionInput = document.getElementById('question');
 const documentStoreProviderInput = document.getElementById('document-store-provider');
 const validationStoreProviderInput = document.getElementById('validation-store-provider');
+const allowedFileExtensions = new Set(['pdf', 'docx', 'txt', 'md', 'csv', 'json']);
+const allowedFileMessage = 'Only PDF, DOCX, TXT, MD, CSV, or JSON files are supported.';
 let latestDocumentId = null;
 let latestDocuments = [];
 let documentSortMode = 'uploaded-date';
@@ -70,6 +72,25 @@ function formatSummaryLine(value) {
 
 function getProviderLabel(provider) {
   return provider === 'oracle-db' ? 'Local Oracle DB' : 'OCI Vector Store';
+}
+
+function isAllowedUploadFile(file) {
+  const extension = String(file?.name || '').split('.').pop().toLowerCase();
+  return allowedFileExtensions.has(extension);
+}
+
+function validateUploadFile(file, statusElement, fileInput) {
+  if (isAllowedUploadFile(file)) {
+    return true;
+  }
+
+  setStatus(statusElement, allowedFileMessage, true);
+
+  if (fileInput) {
+    fileInput.value = '';
+  }
+
+  return false;
 }
 
 function getDocumentCreatedAtMs(document) {
@@ -490,6 +511,10 @@ uploadForm.addEventListener('submit', async (event) => {
     return;
   }
 
+  if (!validateUploadFile(file, uploadStatus, documentInput)) {
+    return;
+  }
+
   const formData = new FormData();
   formData.append('document', file);
   formData.append('documentStoreProvider', documentStoreProviderInput.value);
@@ -560,6 +585,10 @@ documentInput.addEventListener('change', () => {
     return;
   }
 
+  if (!validateUploadFile(documentInput.files[0], uploadStatus, documentInput)) {
+    return;
+  }
+
   suggestedQuestionsPanel.classList.add('hidden');
   suggestedQuestionsStatus.textContent = '';
   suggestedQuestionsStatus.classList.add('hidden');
@@ -585,6 +614,10 @@ templateForm.addEventListener('submit', async (event) => {
 
   if (!file) {
     setStatus(templateStatus, 'Choose a template file first.', true);
+    return;
+  }
+
+  if (!validateUploadFile(file, templateStatus, fileInput)) {
     return;
   }
 
@@ -628,6 +661,10 @@ validateForm.addEventListener('submit', async (event) => {
 
   if (!file) {
     setStatus(validationStatus, 'Choose a document to validate.', true);
+    return;
+  }
+
+  if (!validateUploadFile(file, validationStatus, fileInput)) {
     return;
   }
 

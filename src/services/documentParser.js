@@ -5,14 +5,9 @@ import pdfParse from 'pdf-parse';
 
 const supportedExtensions = new Set(['.pdf', '.docx', '.txt', '.md', '.csv', '.json']);
 
-export function isSupportedFile(fileName = '', mimeType = '') {
+export function isSupportedFile(fileName = '') {
   const extension = path.extname(fileName).toLowerCase();
-
-  if (supportedExtensions.has(extension)) {
-    return true;
-  }
-
-  return mimeType.startsWith('text/');
+  return supportedExtensions.has(extension);
 }
 
 export async function extractTextFromFile(filePath) {

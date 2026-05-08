@@ -44,7 +44,7 @@
           <article class="card">
             <h2>Upload a document</h2>
             <form id="upload-form">
-              <input id="document" name="document" type="file" required />
+              <input id="document" name="document" type="file" accept=".pdf,.docx,.txt,.md,.csv,.json" required />
               <button type="submit">Upload and Index</button>
             </form>
             <p id="upload-status" class="status"></p>
@@ -148,7 +148,7 @@
             <h2>Validate document</h2>
             <form id="template-form">
               <label for="template">Template</label>
-              <input id="template" name="template" type="file" required />
+              <input id="template" name="template" type="file" accept=".pdf,.docx,.txt,.md,.csv,.json" required />
               <button type="submit">Upload Template</button>
             </form>
             <p id="template-status" class="status"></p>
@@ -159,7 +159,7 @@
                 <option value="">No templates uploaded yet</option>
               </select>
               <label for="validation-document">Document to validate</label>
-              <input id="validation-document" name="document" type="file" required />
+              <input id="validation-document" name="document" type="file" accept=".pdf,.docx,.txt,.md,.csv,.json" required />
               <button type="submit">Validate Document</button>
             </form>
             <p id="validation-status" class="status"></p>
